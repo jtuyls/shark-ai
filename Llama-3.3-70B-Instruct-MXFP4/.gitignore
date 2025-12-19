@@ -1,0 +1,10 @@
+# Large model files
+*.irpa
+*.mlir
+*.vmfb
+*.safetensors
+merged.safetensors
+
+# Cache directories
+.cache/
+

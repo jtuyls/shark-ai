@@ -1,0 +1,176 @@
+================================================================================
+Llama-3.3-70B-Instruct-MXFP4 Conversion Guide - Files Created
+================================================================================
+
+The following files have been created to help you download and convert the
+AMD Llama-3.3-70B-Instruct-MXFP4-Preview model to MLIR and IRPA formats:
+
+NEW FILES CREATED:
+------------------
+
+1. scripts/download_llama33_mxfp4.py
+   - Python script to download the model from Hugging Face
+   - Usage: python3 scripts/download_llama33_mxfp4.py --output-dir <DIR> --hf-token <TOKEN>
+
+2. scripts/convert_llama33_mxfp4_to_mlir.sh
+   - Complete automated pipeline script
+   - Downloads → IRPA → MLIR in one command
+   - Usage: ./scripts/convert_llama33_mxfp4_to_mlir.sh --hf-token <TOKEN>
+
+3. docs/LLAMA33_MXFP4_GUIDE.md
+   - Comprehensive documentation
+   - Includes step-by-step instructions, troubleshooting, and advanced options
+
+4. LLAMA33_MXFP4_QUICKSTART.md
+   - Quick reference card with essential commands
+   - Located in repo root for easy access
+
+QUICKEST WAY TO GET STARTED:
+-----------------------------
+
+# Run the automated pipeline (recommended)
+./scripts/convert_llama33_mxfp4_to_mlir.sh --hf-token YOUR_HF_TOKEN
+
+# Or see quick reference
+cat LLAMA33_MXFP4_QUICKSTART.md
+
+# Or read full guide
+cat docs/LLAMA33_MXFP4_GUIDE.md
+
+
+THE CONVERSION PIPELINE:
+------------------------
+
+Step 1: Download from Hugging Face
+  ├── Downloads config.json, *.safetensors, tokenizer files
+  └── Model: amd/Llama-3.3-70B-Instruct-MXFP4-Preview
+
+Step 2: Convert Safetensors → IRPA
+  ├── Tool: amdsharktank.models.llama.tools.import_quark_dataset
+  ├── Handles MXFP4 quantization metadata
+  └── Output: model.irpa (IREE Parameter Archive)
+
+Step 3: Export IRPA → Torch-MLIR
+  ├── Tool: amdsharktank.examples.export_paged_llm_v1
+  ├── Adds paged attention support
+  ├── Configurable batch sizes
+  └── Output: model.mlir + config.json
+
+Step 4: Compile MLIR → VMFB (optional)
+  ├── Tool: iree-compile
+  ├── Hardware-specific optimizations
+  └── Output: model.vmfb (ready for deployment)
+
+
+KEY FEATURES OF THIS MODEL:
+---------------------------
+
+- Quantization: MXFP4 (weights & activations), FP8 (KV cache)
+- Base: Meta Llama-3.3-70B-Instruct
+- Quantization Method: AMD-Quark AutoSmoothQuant
+- Target Hardware: AMD MI350/MI355
+- Performance: ~98% recovery vs FP16
+- Size: ~38B parameters (quantized)
+
+
+IMPORTANT NOTES:
+----------------
+
+1. Hugging Face Token: May be required depending on model access
+2. Disk Space: Ensure sufficient space (~70GB+ for model + intermediates)
+3. RAM: 70B models require substantial memory during conversion
+4. Model Base: This is a "70b" architecture (important for import_quark_dataset)
+5. Quantization Params: 
+   - FP4 block size: 32
+   - Scale format: fe8m0
+   - These match AMD-Quark settings
+
+
+CUSTOMIZATION OPTIONS:
+----------------------
+
+Batch Sizes:
+  --bs-prefill=1,4,8      # For prefill phase
+  --bs-decode=1,4,8,16    # For decode phase
+
+Block Sequence Stride:
+  --block-seq-stride=16   # For paged attention (8, 16, or 32 common)
+
+Tensor Parallelism:
+  --tensor-parallelism-size=8  # For multi-GPU deployment
+
+
+NEXT STEPS AFTER CONVERSION:
+----------------------------
+
+1. Test the model:
+   python3 -m amdsharktank.examples.test_paged_llm_v1 \
+       --irpa-file=model.irpa
+
+2. Compile for your hardware:
+   iree-compile model.mlir -o model.vmfb \
+       --iree-hal-target-device=hip \
+       --iree-hip-target=gfx942  # Adjust for your GPU
+
+3. Serve with shortfin:
+   See docs/shortfin/llm/user/llama_serving.md
+
+
+TROUBLESHOOTING:
+----------------
+
+Issue: "No safetensors files found"
+  → Ensure download completed successfully
+  → Check MODEL_DIR path
+
+Issue: "Out of memory during conversion"
+  → Use a machine with more RAM
+  → Enable swap space
+  → Consider processing in smaller chunks
+
+Issue: "Import quark dataset fails"
+  → Verify config.json exists
+  → Check model-base parameter (should be "70b")
+  → Ensure safetensors files are not corrupted
+
+Issue: "MLIR export fails"
+  → Check IRPA file was created successfully
+  → Verify batch size configurations
+  → Ensure sufficient disk space
+
+
+USEFUL COMMANDS:
+----------------
+
+# Check generated files
+ls -lh Llama-3.3-70B-Instruct-MXFP4/
+
+# Inspect IRPA metadata
+python3 -m amdsharktank.tools.dump_irpa \
+    Llama-3.3-70B-Instruct-MXFP4/model.irpa \
+    --show-metadata
+
+# View MLIR (first 100 lines)
+head -n 100 Llama-3.3-70B-Instruct-MXFP4/model.mlir
+
+# Test tokenizer
+python3 -c "
+from transformers import AutoTokenizer
+tokenizer = AutoTokenizer.from_pretrained('Llama-3.3-70B-Instruct-MXFP4/')
+print(tokenizer('Hello world'))
+"
+
+
+REFERENCES:
+-----------
+
+Model Page: https://huggingface.co/amd/Llama-3.3-70B-Instruct-MXFP4-Preview
+AMD-Quark: https://github.com/amd/quark
+Documentation: docs/LLAMA33_MXFP4_GUIDE.md
+Quick Start: LLAMA33_MXFP4_QUICKSTART.md
+
+================================================================================
+For questions or issues, see the troubleshooting section in the full guide.
+================================================================================
+
+
