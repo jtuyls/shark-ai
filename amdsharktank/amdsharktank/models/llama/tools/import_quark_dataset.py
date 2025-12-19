@@ -472,7 +472,6 @@ def main(argv):
 
     config_json_path: Path = args.config_json
     params_path: Path = args.params
-    # Determine split sizes based on model base
     split_sizes = [4096, 4096, 4096] if args.model_base == "7b" else [8192, 1024, 1024]
     
     # Read num_hidden_layers from config.json if available, otherwise use defaults
