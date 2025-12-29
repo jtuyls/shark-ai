@@ -103,7 +103,9 @@ python3 -m amdsharktank.models.llama.tools.import_quark_dataset \
 - `--fp4-block-size=32` - Block size for FP4 quantization
 - `--fp4-scale-format=fe8m0` - Scale format for FP4 quantization
 - `--quantizer-dtype` - FP8 type for quantizer (fnuz for MI300X, fn for MI355)
-- `--apply-shuffle` - **Required** for the ASM matmul kernel
+- `--apply-shuffle` - **Required** for the ASM matmul kernel (omit for IREE kernel)
+
+> **Kernel Options:** The `--apply-shuffle` flag reorders weights for the optimized ASM kernel. If you prefer using the generic IREE kernel (slower but no shuffle required), omit this flag and use `--matmul-kernel="amdsharktank.iree;*"` during export instead.
 
 ### Step 4: Export to Torch-MLIR
 
@@ -121,7 +123,7 @@ python3 -m amdsharktank.examples.export_paged_llm_v1 \
     --attention-dtype=float16 \
     --attention-kernel=torch \
     --use-hf \
-    --matmul-kernel="sharktank.asm;*"
+    --matmul-kernel="amdsharktank.asm;*"
 ```
 
 **For MI350/MI355:**
@@ -137,7 +139,7 @@ python3 -m amdsharktank.examples.export_paged_llm_v1 \
     --attention-kernel=torch \
     --kv-cache-dtype=float8_e4m3fn \
     --use-hf \
-    --matmul-kernel="sharktank.asm;*"
+    --matmul-kernel="amdsharktank.asm;*"
 ```
 
 **Key parameters:**
@@ -148,9 +150,27 @@ python3 -m amdsharktank.examples.export_paged_llm_v1 \
 - `--attention-kernel=torch` - Use PyTorch attention kernel
 - `--kv-cache-dtype` - FP8 type for KV cache (fn for MI355)
 - `--use-hf` - Use Hugging Face model format
-- `--matmul-kernel="sharktank.asm;*"` - Use optimized ASM kernel for matmul
+- `--matmul-kernel="amdsharktank.asm;*"` - Use optimized ASM kernel for matmul (requires shuffled IRPA)
 
 > **Note:** Do NOT use `--top-k=1` if you plan to evaluate perplexity, as it exports only top-1 token indices instead of full logits.
+
+#### Alternative: Using IREE Kernel
+
+**For MI350/MI355 with IREE kernel:**
+```bash
+python3 -m amdsharktank.examples.export_paged_llm_v1 \
+    --irpa-file=./Llama-3.3-70B-Instruct-MXFP4/model_mi355_no_shuffle.irpa \
+    --output-mlir=./Llama-3.3-70B-Instruct-MXFP4/model_mi355_iree.mlir \
+    --output-config=./Llama-3.3-70B-Instruct-MXFP4/config_mi355_iree.json \
+    --bs-prefill=4 \
+    --bs-decode=4 \
+    --activation-dtype=float16 \
+    --attention-dtype=float16 \
+    --attention-kernel=torch \
+    --kv-cache-dtype=float8_e4m3fn \
+    --use-hf \
+    --matmul-kernel="amdsharktank.iree;*"
+```
 
 ### Step 5: Compile to VMFB
 
@@ -172,14 +192,35 @@ iree-compile ./Llama-3.3-70B-Instruct-MXFP4/model_mi355.mlir \
     --iree-hip-target=gfx950
 ```
 
+#### Compiling IREE Kernel MLIR
+
+When compiling MLIR exported with `--matmul-kernel="amdsharktank.iree;*"`, you may need to increase the affinity solver iterations:
+
+```bash
+iree-compile ./Llama-3.3-70B-Instruct-MXFP4/model_mi355_iree.mlir \
+    -o ./Llama-3.3-70B-Instruct-MXFP4/model_mi355_iree.vmfb \
+    --iree-hal-target-device=hip \
+    --iree-hip-target=gfx950 \
+    --iree-stream-affinity-solver-max-iterations=1024
+```
+
+> **Note:** The `--iree-stream-affinity-solver-max-iterations=1024` flag is required for IREE kernel MLIR to resolve device affinity analysis. Without it, compilation may fail with "failed to solve for affinity analysis".
+
 ## Output Files
 
 After successful conversion, you'll have:
 
-1. **`model.irpa` / `model_mi355.irpa`** - Model weights in IRPA format (with shuffled FP4 weights)
-2. **`model.mlir` / `model_mi355.mlir`** - Model in MLIR format with paged attention support
-3. **`config_export.json` / `config_mi355.json`** - Export configuration for the serving runtime
-4. **`model.vmfb` / `model_mi355.vmfb`** - Compiled model ready for deployment
+**ASM kernel:**
+1. **`model_mi355.irpa`** - Model weights in IRPA format (with shuffled FP4 weights)
+2. **`model_mi355.mlir`** - Model in MLIR format with ASM matmul kernels
+3. **`config_mi355.json`** - Export configuration for the serving runtime
+4. **`model_mi355.vmfb`** - Compiled model ready for deployment (~400 MB)
+
+**IREE kernel (alternative):**
+1. **`model_mi355_no_shuffle.irpa`** - Model weights without shuffle (for IREE kernel)
+2. **`model_mi355_iree.mlir`** - Model in MLIR format with IREE matmul kernels
+3. **`config_mi355_iree.json`** - Export configuration
+4. **`model_mi355_iree.vmfb`** - Compiled model (~3 MB, slower execution)
 
 ## Perplexity Evaluation
 
@@ -198,12 +239,6 @@ python3 -m amdsharktank.evaluate.perplexity_iree \
     --input-vmfb=./Llama-3.3-70B-Instruct-MXFP4/model_mi355.vmfb
 ```
 
-**Expected results:**
-```
-Mean perplexity: ~8.4
-Prefill time: ~105 ms
-Decode time per token: ~56 ms
-```
 
 ## Advanced Options
 
@@ -230,7 +265,7 @@ python3 -m amdsharktank.examples.export_paged_llm_v1 \
     --attention-kernel=torch \
     --kv-cache-dtype=float8_e4m3fn \
     --use-hf \
-    --matmul-kernel="sharktank.asm;*" \
+    --matmul-kernel="amdsharktank.asm;*" \
     --tensor-parallelism-size=8
 ```
 
@@ -292,12 +327,19 @@ If you encounter `hipErrorNoDevice` errors:
 
 3. Check GPU visibility with `rocm-smi` before running
 
+### Affinity Analysis Failure
+
+If you see "failed to solve for affinity analysis" during compilation:
+- This occurs with IREE kernel MLIR (exported with `--matmul-kernel="amdsharktank.iree;*"`)
+- Add `--iree-stream-affinity-solver-max-iterations=1024` to your iree-compile command
+
 ### High Perplexity Values
 
 If perplexity is extremely high (>1000):
-- Ensure `--apply-shuffle` was used during IRPA creation
-- Ensure `--matmul-kernel="sharktank.asm;*"` is used during export
+- Ensure `--apply-shuffle` was used during IRPA creation when using ASM kernel
+- Ensure `--matmul-kernel="amdsharktank.asm;*"` is used during export with shuffled IRPA
 - Do NOT use `--top-k=1` as it breaks perplexity calculation
+- If using IREE kernel, ensure IRPA was created WITHOUT `--apply-shuffle`
 
 ### Out of Memory During Conversion
 
